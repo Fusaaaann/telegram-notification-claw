@@ -24,7 +24,6 @@ User surface (self-service):
 - src/telegram_bot.py: bot polling loop (stores chat_id on /start)
 - src/db.py: SQLite persistence (reminders, chat_bindings, user_tokens)
 - scripts/install_deps.sh|ps1: dependency install scripts (NOT executed)
-- scripts/deploy_ssh.sh|ps1: mock SSH deployment scripts (NOT executed)
 - cli/reminderctl.py: local CLI that calls the API using bearer token from .env
 - skill/reminder-crud/SKILL.md: agent-facing usage notes
 
