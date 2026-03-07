@@ -47,7 +47,7 @@ class BlobStorage:
         try:
             result = client.get(self.blob_path, access=self.access)
         except BlobError:
-            raise
+            return None
         if not result:
             return None
         status = getattr(result, "status_code", None) or getattr(result, "statusCode", None)
