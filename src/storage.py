@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from vercel.blob import BlobClient
-from vercel.blob.errors import BlobError
+from vercel.blob.errors import BlobError, BlobNotFoundError
 
 
 class StorageBackend(Protocol):
@@ -46,7 +46,7 @@ class BlobStorage:
         client = self._client()
         try:
             result = client.get(self.blob_path, access=self.access)
-        except BlobError:
+        except (BlobError, BlobNotFoundError):
             return None
         if not result:
             return None
