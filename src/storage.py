@@ -55,11 +55,10 @@ class BlobStorage:
         status = getattr(result, "status_code", None) or getattr(result, "statusCode", None)
         if status is not None and status != 200:
             return None
-        if not result.stream:
+        if not result.content:
             return None
         with open(self.local_path, "wb") as f:
-            for chunk in result.stream:
-                f.write(chunk)
+            f.write(result.content)
 
     def sync_to_remote(self) -> None:
         os.makedirs(os.path.dirname(self.local_path) or ".", exist_ok=True)
