@@ -1,0 +1,43 @@
+# .github/workflows/push-develop-to-prod-develop-test.yml
+name: "[TEST] Push develop to production repo (develop)"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  push:
+    name: Push develop -> prod/develop (test)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: develop
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Configure SSH (deploy key)
+        env:
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$PROD_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t rsa,ed25519 github.com >> ~/.ssh/known_hosts
+
+      - name: Push develop -> production develop (force-with-lease)
+        env:
+          PROD_GIT_URL: ${{ secrets.PROD_GIT_URL }} # git@github.com:OWNER/PRIVATE_PROD_REPO.git
+        run: |
+          git remote remove production 2>/dev/null || true
+          git remote add production "$PROD_GIT_URL"
+          git fetch production develop
+          git push --force-with-lease=develop production HEAD:develop
