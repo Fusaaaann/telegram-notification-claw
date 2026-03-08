@@ -1,3 +1,4 @@
+# .github/workflows/push-to-production-repo.yml
 name: Push main to production repo
 
 on:
@@ -12,11 +13,18 @@ jobs:
   push:
     if: ${{ github.event.pull_request.merged == true }}
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout merged commit
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Configure SSH (deploy key)
         env:
@@ -27,11 +35,16 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -t rsa,ed25519 github.com >> ~/.ssh/known_hosts
 
-      - name: Push to production repo
+      - name: Push to production repo (force-with-lease)
         env:
-          PROD_GIT_URL: ${{ secrets.PROD_GIT_URL }}
+          PROD_GIT_URL: ${{ secrets.PROD_GIT_URL }} # git@github.com:OWNER/PRIVATE_PROD_REPO.git
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote remove production 2>/dev/null || true
           git remote add production "$PROD_GIT_URL"
-          git push production HEAD:main
+
+          # required for --force-with-lease to be meaningful
+          git fetch production main
+
+          # update production main to exactly this merge commit, but only if
+          # production/main wasn't changed since we fetched it
+          git push --force-with-lease=main production HEAD:main
