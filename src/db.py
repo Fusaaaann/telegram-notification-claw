@@ -143,6 +143,18 @@ class ReminderDB:
                 raise KeyError("reminder not found")
             return dict(row)
 
+    def get_due_reminders(self) -> List[Dict[str, Any]]:
+        """Return all undone reminders with due_at set, across all users. Caller filters by time."""
+        with self._with_conn(write=False) as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM reminders
+                WHERE done = 0 AND due_at IS NOT NULL
+                ORDER BY due_at ASC
+                """
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     def list_reminders(self, user_id: int, include_done: bool = True) -> List[Dict[str, Any]]:
         with self._with_conn(write=False) as conn:
             if include_done:
