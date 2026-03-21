@@ -34,7 +34,7 @@ User surface (self-service):
 
 A user should send `/start <user-token>` to the bot once so the system links that token's user_id to the Telegram chat/channel used for reminder delivery.
 
-If `/start` is sent without a token, the bot falls back to binding the Telegram sender's numeric Telegram user_id directly.
+The webhook accepts `/start <token>` and `/start@BotName <token>`. Requests without a valid token are rejected and do not bind a chat.
 
 ## Vercel deployment
 
@@ -43,6 +43,7 @@ through the webhook endpoint, and due reminders can be dispatched by calling the
 Vercel Cron or another scheduler.
 
 Vercel serverless is read-only except for `/tmp`, so persistence is moved to Vercel Blob.
+Writes use a blob-backed lease lock to reduce lost updates between cooperating app instances, but this remains a best-effort mitigation around a SQLite file, not a true transactional multi-writer datastore.
 
 Required env vars for Blob storage:
 

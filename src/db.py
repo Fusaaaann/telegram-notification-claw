@@ -35,17 +35,26 @@ class ReminderDB:
 
     @contextmanager
     def _with_conn(self, write: bool):
+        if write:
+            with self.storage.write_lock():
+                self.storage.sync_from_remote()
+                conn = sqlite3.connect(self.storage.local_path)
+                conn.row_factory = sqlite3.Row
+                try:
+                    yield conn
+                    conn.commit()
+                finally:
+                    conn.close()
+                    self.storage.sync_to_remote()
+            return
+
         self.storage.sync_from_remote()
         conn = sqlite3.connect(self.storage.local_path)
         conn.row_factory = sqlite3.Row
         try:
             yield conn
-            if write:
-                conn.commit()
         finally:
             conn.close()
-            if write:
-                self.storage.sync_to_remote()
 
     def _init(self) -> None:
         with self._with_conn(write=True) as conn:

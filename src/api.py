@@ -22,6 +22,14 @@ def create_api(db: ReminderDB) -> FastAPI:
     def _user_id_dep(authorization: str = Header(default="", alias="Authorization")) -> int:
         return require_user_id_from_bearer(db, authorization)
 
+    def _require_admin_scope_for_reminder(reminder: dict, scoped_user_id: Optional[int]) -> None:
+        if reminder["visibility"] != "user":
+            return
+        if scoped_user_id is None:
+            raise HTTPException(status_code=400, detail="X-Reminder-User-Id is required for user visibility")
+        if int(reminder["user_id"]) != scoped_user_id:
+            raise HTTPException(status_code=404, detail="not found")
+
     @app.get("/health")
     def health():
         return {"ok": True}
@@ -54,9 +62,11 @@ def create_api(db: ReminderDB) -> FastAPI:
     @app.get("/v1/admin/reminders/{reminder_id}", dependencies=[Depends(require_admin_bearer)])
     def admin_get_reminder(
         reminder_id: int,
+        user_id: Optional[int] = Depends(optional_scoped_user_id),
     ) -> Reminder:
         try:
             r = db.get_reminder(reminder_id=reminder_id)
+            _require_admin_scope_for_reminder(r, user_id)
             return Reminder(**r)
         except KeyError:
             raise HTTPException(status_code=404, detail="not found")
@@ -68,7 +78,10 @@ def create_api(db: ReminderDB) -> FastAPI:
         user_id: Optional[int] = Depends(optional_scoped_user_id),
     ) -> Reminder:
         try:
-            if payload.visibility == "user" and user_id is None:
+            existing = db.get_reminder(reminder_id=reminder_id)
+            if existing["visibility"] == "user":
+                _require_admin_scope_for_reminder(existing, user_id)
+            if (payload.visibility or existing["visibility"]) == "user" and user_id is None:
                 raise HTTPException(status_code=400, detail="X-Reminder-User-Id is required for user visibility")
             r = db.update_admin_reminder(
                 reminder_id=reminder_id,
@@ -87,8 +100,11 @@ def create_api(db: ReminderDB) -> FastAPI:
     @app.delete("/v1/admin/reminders/{reminder_id}", dependencies=[Depends(require_admin_bearer)])
     def admin_delete_reminder(
         reminder_id: int,
+        user_id: Optional[int] = Depends(optional_scoped_user_id),
     ):
         try:
+            reminder = db.get_reminder(reminder_id=reminder_id)
+            _require_admin_scope_for_reminder(reminder, user_id)
             db.delete_admin_reminder(reminder_id=reminder_id)
             return {"ok": True}
         except KeyError:

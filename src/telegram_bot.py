@@ -35,13 +35,15 @@ def build_bot_app(db: ReminderDB) -> Application:
             return
         chat_id = int(update.effective_chat.id)
         token = context.args[0].strip() if context.args else ""
-        user_id, reply_text = bind_chat_for_start(
-            db,
-            chat_id=chat_id,
-            token=token,
-            fallback_user_id=int(update.effective_user.id),
-        )
-        logger.info("Bound chat_id=%s to user_id=%s via /start", chat_id, user_id)
+        try:
+            user_id, reply_text = bind_chat_for_start(
+                db,
+                chat_id=chat_id,
+                token=token,
+            )
+            logger.info("Bound chat_id=%s to user_id=%s via /start", chat_id, user_id)
+        except ValueError as exc:
+            reply_text = str(exc)
         if update.message:
             await update.message.reply_text(reply_text)
 
@@ -55,7 +57,10 @@ def build_bot_app(db: ReminderDB) -> Application:
 
 def parse_start_token(text: str) -> str:
     parts = text.strip().split(None, 1)
-    if not parts or parts[0] != "/start":
+    if not parts:
+        return ""
+    command = parts[0]
+    if command != "/start" and not command.startswith("/start@"):
         return ""
     return parts[1].strip() if len(parts) == 2 else ""
 
@@ -65,7 +70,6 @@ def bind_chat_for_start(
     *,
     chat_id: int,
     token: str = "",
-    fallback_user_id: int | None = None,
 ) -> tuple[int, str]:
     if token:
         user_id = db.get_user_id_by_token(token)
@@ -74,11 +78,7 @@ def bind_chat_for_start(
         db.upsert_chat_binding(user_id=user_id, chat_id=chat_id)
         return user_id, "ok, token linked; this chat will receive reminders."
 
-    if fallback_user_id is None:
-        raise ValueError("Missing user identity for /start")
-
-    db.upsert_chat_binding(user_id=fallback_user_id, chat_id=chat_id)
-    return fallback_user_id, "ok, bound; you can now receive reminder messages."
+    raise ValueError("Missing start token. Use /start <user-token>.")
 
 
 def _due_at_to_utc(s: str, *, timezone_name: str | None = None) -> datetime:
@@ -99,8 +99,6 @@ async def handle_webhook_update(
     text = str(message.get("text") or "").strip()
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
-    from_user = message.get("from") or {}
-    fallback_user_id = from_user.get("id")
 
     if not text.startswith("/start") or chat_id is None:
         return {"ok": True, "handled": False}
@@ -110,7 +108,6 @@ async def handle_webhook_update(
             db,
             chat_id=int(chat_id),
             token=parse_start_token(text),
-            fallback_user_id=int(fallback_user_id) if fallback_user_id is not None else None,
         )
     except ValueError as exc:
         reply_text = str(exc)

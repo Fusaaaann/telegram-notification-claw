@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from src.db import ReminderDB
 from src.storage import LocalStorage
-from src.telegram_bot import dispatch_due_reminders, handle_webhook_update
+from src.telegram_bot import bind_chat_for_start, dispatch_due_reminders, handle_webhook_update, parse_start_token
 
 
 class FakeBot:
@@ -62,6 +62,43 @@ class TelegramFlowTests(unittest.IsolatedAsyncioTestCase):
         stored = self.db.get_reminder(reminder_id=int(reminder["id"]))
         self.assertEqual(int(stored["done"]), 1)
         self.assertIn((9001, "pay rent"), bot.messages)
+
+    async def test_start_command_accepts_bot_name_suffix(self) -> None:
+        self.assertEqual(parse_start_token("/start@ReminderBot user-token"), "user-token")
+
+        self.db.upsert_user_token(user_id=55, token="user-token")
+        webhook_result = await handle_webhook_update(
+            self.db,
+            {
+                "message": {
+                    "text": "/start@ReminderBot user-token",
+                    "chat": {"id": 9055},
+                }
+            },
+            bot=FakeBot(),
+        )
+
+        self.assertEqual(webhook_result["user_id"], 55)
+        self.assertEqual(self.db.get_chat_id(55), 9055)
+
+    async def test_start_without_token_is_rejected(self) -> None:
+        bot = FakeBot()
+
+        webhook_result = await handle_webhook_update(
+            self.db,
+            {
+                "message": {
+                    "text": "/start",
+                    "chat": {"id": 9002},
+                    "from": {"id": 1234},
+                }
+            },
+            bot=bot,
+        )
+
+        self.assertIsNone(webhook_result["user_id"])
+        self.assertIsNone(self.db.get_chat_id(1234))
+        self.assertIn((9002, "Missing start token. Use /start <user-token>."), bot.messages)
 
     async def test_due_dispatch_respects_offset_aware_due_at(self) -> None:
         self.db.upsert_chat_binding(user_id=7, chat_id=7007)

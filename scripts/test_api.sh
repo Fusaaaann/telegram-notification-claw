@@ -149,7 +149,7 @@ vcurl /v1/admin/reminders \
   --header "Authorization: Bearer $ADMIN_TOKEN" \
   --header "X-Reminder-User-Id: $TEST_USER_ID" \
   --header "Content-Type: application/json" \
-  --data '{"text":"buy milk","due_at":null}'
+  --data '{"text":"buy milk","due_at":null,"visibility":"user"}'
 check_status "admin create (no due_at)" "200"
 check_field  "admin create text"        "text" "buy milk"
 check_field  "admin create done=false"  "done" "False"
@@ -161,7 +161,7 @@ vcurl /v1/admin/reminders \
   --header "Authorization: Bearer $ADMIN_TOKEN" \
   --header "X-Reminder-User-Id: $TEST_USER_ID" \
   --header "Content-Type: application/json" \
-  --data '{"text":"pay rent","due_at":"2026-03-10T09:00:00"}'
+  --data '{"text":"pay rent","due_at":"2026-03-10T09:00:00","visibility":"user"}'
 check_status "admin create (with due_at)" "200"
 check_field  "admin create due_at set"    "text" "pay rent"
 
@@ -284,7 +284,14 @@ check_status "wrong admin token → 401" "401"
 
 vcurl /v1/admin/reminders \
   --header "Authorization: Bearer $ADMIN_TOKEN"
-check_status "missing X-Reminder-User-Id → 400" "400"
+check_status "admin list without scope returns globals" "200"
+
+vcurl /v1/admin/reminders \
+  --request POST \
+  --header "Authorization: Bearer $ADMIN_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data '{"text":"missing scope","visibility":"user"}'
+check_status "user-visible admin create without scope → 400" "400"
 
 vcurl /v1/user/reminders \
   --header "Authorization: Bearer invalid-user-token"
@@ -346,7 +353,7 @@ vcurl /v1/admin/reminders \
   --header "Authorization: Bearer $ADMIN_TOKEN" \
   --header "X-Reminder-User-Id: $TEST_USER_ID" \
   --header "Content-Type: application/json" \
-  --data '{"text":"persistence test"}'
+  --data '{"text":"persistence test","visibility":"user"}'
 check_status "blob: create reminder" "200"
 PERSIST_ID=$(jq_field id)
 
