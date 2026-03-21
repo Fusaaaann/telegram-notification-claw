@@ -1,6 +1,12 @@
 import os
 from dataclasses import dataclass
-from dotenv import load_dotenv
+from zoneinfo import ZoneInfo
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional at runtime
+    def load_dotenv() -> None:
+        return None
 
 load_dotenv()
 
@@ -15,8 +21,12 @@ class Settings:
     blob_path: str = os.getenv("REMINDER_BLOB_PATH", "reminders.sqlite3").strip()
     blob_access: str = os.getenv("REMINDER_BLOB_ACCESS", "private").strip().lower()
     blob_token: str = os.getenv("REMINDER_BLOB_TOKEN", "").strip()
+    reminder_timezone: str = os.getenv("REMINDER_TIMEZONE", "UTC").strip() or "UTC"
 
     host: str = os.getenv("REMINDER_API_HOST", "0.0.0.0").strip()
     port: int = int(os.getenv("REMINDER_API_PORT", "8088"))
+
+    def zoneinfo(self) -> ZoneInfo:
+        return ZoneInfo(self.reminder_timezone)
 
 settings = Settings()

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .config import Settings
@@ -11,7 +11,7 @@ from .storage import BlobStorage, StorageBackend
 
 
 def _utcnow_iso() -> str:
-    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 class ReminderDB:
@@ -54,6 +54,7 @@ class ReminderDB:
                 CREATE TABLE IF NOT EXISTS reminders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
+                    visibility TEXT NOT NULL DEFAULT 'user',
                     text TEXT NOT NULL,
                     due_at TEXT NULL,
                     done INTEGER NOT NULL DEFAULT 0,
@@ -62,6 +63,9 @@ class ReminderDB:
                 )
                 """
             )
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(reminders)").fetchall()}
+            if "visibility" not in columns:
+                conn.execute("ALTER TABLE reminders ADD COLUMN visibility TEXT NOT NULL DEFAULT 'user'")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS chat_bindings (
@@ -102,6 +106,13 @@ class ReminderDB:
             ).fetchone()
             return int(row["chat_id"]) if row else None
 
+    def list_chat_bindings(self) -> List[Dict[str, Any]]:
+        with self._with_conn(write=False) as conn:
+            rows = conn.execute(
+                "SELECT user_id, chat_id, created_at FROM chat_bindings ORDER BY user_id ASC"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     # --- user tokens ---
     def upsert_user_token(self, user_id: int, token: str) -> None:
         with self._with_conn(write=True) as conn:
@@ -124,20 +135,29 @@ class ReminderDB:
             return int(row["user_id"]) if row else None
 
     # --- reminders CRUD ---
-    def create_reminder(self, user_id: int, text: str, due_at: Optional[str]) -> Dict[str, Any]:
+    def create_reminder(
+        self,
+        user_id: Optional[int],
+        text: str,
+        due_at: Optional[str],
+        visibility: str = "global",
+    ) -> Dict[str, Any]:
         now = _utcnow_iso()
+        stored_user_id = 0 if visibility == "global" else int(user_id or 0)
+        if visibility == "user" and stored_user_id <= 0:
+            raise ValueError("user-specific reminders require a user_id")
         with self._with_conn(write=True) as conn:
             cur = conn.execute(
                 """
-                INSERT INTO reminders(user_id, text, due_at, done, created_at, updated_at)
-                VALUES (?, ?, ?, 0, ?, ?)
+                INSERT INTO reminders(user_id, visibility, text, due_at, done, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 0, ?, ?)
                 """,
-                (user_id, text, due_at, now, now),
+                (stored_user_id, visibility, text, due_at, now, now),
             )
             rid = int(cur.lastrowid)
             row = conn.execute(
-                "SELECT * FROM reminders WHERE user_id=? AND id=?",
-                (user_id, rid),
+                "SELECT * FROM reminders WHERE id=?",
+                (rid,),
             ).fetchone()
             if not row:
                 raise KeyError("reminder not found")
@@ -155,31 +175,112 @@ class ReminderDB:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def list_reminders(self, user_id: int, include_done: bool = True) -> List[Dict[str, Any]]:
+    def list_reminders_for_admin(
+        self,
+        scoped_user_id: Optional[int] = None,
+        include_done: bool = True,
+        visibility: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         with self._with_conn(write=False) as conn:
-            if include_done:
-                rows = conn.execute(
-                    "SELECT * FROM reminders WHERE user_id=? ORDER BY id DESC",
-                    (user_id,),
-                ).fetchall()
+            clauses = []
+            params: list[Any] = []
+            if scoped_user_id is None:
+                clauses.append("visibility='global'")
             else:
-                rows = conn.execute(
-                    "SELECT * FROM reminders WHERE user_id=? AND done=0 ORDER BY id DESC",
-                    (user_id,),
-                ).fetchall()
+                clauses.append("(visibility='global' OR (visibility='user' AND user_id=?))")
+                params.append(scoped_user_id)
+            if not include_done:
+                clauses.append("done=0")
+            if visibility:
+                clauses.append("visibility=?")
+                params.append(visibility)
+            query = "SELECT * FROM reminders"
+            if clauses:
+                query += " WHERE " + " AND ".join(clauses)
+            query += " ORDER BY id DESC"
+            rows = conn.execute(query, tuple(params)).fetchall()
             return [dict(r) for r in rows]
 
-    def get_reminder(self, user_id: int, reminder_id: int) -> Dict[str, Any]:
+    def list_reminders_for_user(self, user_id: int, include_done: bool = True) -> List[Dict[str, Any]]:
+        with self._with_conn(write=False) as conn:
+            clauses = ["(visibility='global' OR (visibility='user' AND user_id=?))"]
+            params: list[Any] = [user_id]
+            if not include_done:
+                clauses.append("done=0")
+            rows = conn.execute(
+                f"SELECT * FROM reminders WHERE {' AND '.join(clauses)} ORDER BY id DESC",
+                tuple(params),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_reminder(self, reminder_id: int) -> Dict[str, Any]:
         with self._with_conn(write=False) as conn:
             row = conn.execute(
-                "SELECT * FROM reminders WHERE user_id=? AND id=?",
-                (user_id, reminder_id),
+                "SELECT * FROM reminders WHERE id=?",
+                (reminder_id,),
             ).fetchone()
             if not row:
                 raise KeyError("reminder not found")
             return dict(row)
 
-    def update_reminder(
+    def get_user_visible_reminder(self, user_id: int, reminder_id: int) -> Dict[str, Any]:
+        with self._with_conn(write=False) as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM reminders
+                WHERE id=? AND (visibility='global' OR (visibility='user' AND user_id=?))
+                """,
+                (reminder_id, user_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("reminder not found")
+            return dict(row)
+
+    def update_admin_reminder(
+        self,
+        reminder_id: int,
+        text: Optional[str] = None,
+        due_at: Optional[str] = None,
+        done: Optional[bool] = None,
+        visibility: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        with self._with_conn(write=True) as conn:
+            existing = conn.execute(
+                "SELECT * FROM reminders WHERE id=?",
+                (reminder_id,),
+            ).fetchone()
+            if not existing:
+                raise KeyError("reminder not found")
+            new_text = text if text is not None else existing["text"]
+            new_due_at = due_at if due_at is not None else existing["due_at"]
+            new_done = int(done) if done is not None else int(existing["done"])
+            new_visibility = visibility if visibility is not None else existing["visibility"]
+            if new_visibility == "global":
+                new_user_id = 0
+            else:
+                current_user_id = int(existing["user_id"])
+                new_user_id = int(user_id if user_id is not None else current_user_id)
+                if new_user_id <= 0:
+                    raise ValueError("user-specific reminders require a user_id")
+            now = _utcnow_iso()
+            conn.execute(
+                """
+                UPDATE reminders
+                SET user_id=?, visibility=?, text=?, due_at=?, done=?, updated_at=?
+                WHERE id=?
+                """,
+                (new_user_id, new_visibility, new_text, new_due_at, new_done, now, reminder_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM reminders WHERE id=?",
+                (reminder_id,),
+            ).fetchone()
+            if not row:
+                raise KeyError("reminder not found")
+            return dict(row)
+
+    def update_user_reminder(
         self,
         user_id: int,
         reminder_id: int,
@@ -189,8 +290,8 @@ class ReminderDB:
     ) -> Dict[str, Any]:
         with self._with_conn(write=True) as conn:
             existing = conn.execute(
-                "SELECT * FROM reminders WHERE user_id=? AND id=?",
-                (user_id, reminder_id),
+                "SELECT * FROM reminders WHERE id=? AND visibility='user' AND user_id=?",
+                (reminder_id, user_id),
             ).fetchone()
             if not existing:
                 raise KeyError("reminder not found")
@@ -202,27 +303,40 @@ class ReminderDB:
                 """
                 UPDATE reminders
                 SET text=?, due_at=?, done=?, updated_at=?
-                WHERE user_id=? AND id=?
+                WHERE id=? AND user_id=? AND visibility='user'
                 """,
-                (new_text, new_due_at, new_done, now, user_id, reminder_id),
+                (new_text, new_due_at, new_done, now, reminder_id, user_id),
             )
             row = conn.execute(
-                "SELECT * FROM reminders WHERE user_id=? AND id=?",
-                (user_id, reminder_id),
+                "SELECT * FROM reminders WHERE id=?",
+                (reminder_id,),
             ).fetchone()
             if not row:
                 raise KeyError("reminder not found")
             return dict(row)
 
-    def delete_reminder(self, user_id: int, reminder_id: int) -> None:
+    def delete_admin_reminder(self, reminder_id: int) -> None:
         with self._with_conn(write=True) as conn:
             row = conn.execute(
-                "SELECT id FROM reminders WHERE user_id=? AND id=?",
-                (user_id, reminder_id),
+                "SELECT id FROM reminders WHERE id=?",
+                (reminder_id,),
             ).fetchone()
             if not row:
                 raise KeyError("reminder not found")
             conn.execute(
-                "DELETE FROM reminders WHERE user_id=? AND id=?",
-                (user_id, reminder_id),
+                "DELETE FROM reminders WHERE id=?",
+                (reminder_id,),
+            )
+
+    def delete_user_reminder(self, user_id: int, reminder_id: int) -> None:
+        with self._with_conn(write=True) as conn:
+            row = conn.execute(
+                "SELECT id FROM reminders WHERE id=? AND user_id=? AND visibility='user'",
+                (reminder_id, user_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("reminder not found")
+            conn.execute(
+                "DELETE FROM reminders WHERE id=? AND user_id=? AND visibility='user'",
+                (reminder_id, user_id),
             )

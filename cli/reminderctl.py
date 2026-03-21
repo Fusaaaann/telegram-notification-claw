@@ -7,7 +7,11 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlencode
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional during local/unit testing
+    def load_dotenv() -> None:
+        return None
 
 from .datecalc import parse_due_at, to_iso
 
@@ -62,19 +66,22 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("health")
 
-    # Admin commands (require REMINDER_SCOPE_USER_ID)
+    # Admin commands (REMINDER_SCOPE_USER_ID required only for user-specific visibility)
     c = sub.add_parser("admin-create")
     c.add_argument("text")
     c.add_argument("--due-at", default=None)
+    c.add_argument("--visibility", choices=["global", "user"], default="global")
 
     l = sub.add_parser("admin-list")
     l.add_argument("--include-done", default="true")
+    l.add_argument("--visibility", choices=["global", "user"], default=None)
 
     u = sub.add_parser("admin-update")
     u.add_argument("reminder_id", type=int)
     u.add_argument("--text", default=None)
     u.add_argument("--due-at", default=None)
     u.add_argument("--done", default=None)
+    u.add_argument("--visibility", choices=["global", "user"], default=None)
 
     d = sub.add_parser("admin-delete")
     d.add_argument("reminder_id", type=int)
@@ -107,7 +114,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd.startswith("admin-"):
-        if not scope_user_id and args.cmd != "admin-issue-user-token":
+        admin_visibility = getattr(args, "visibility", None)
+        needs_scope_user_id = args.cmd in {"admin-create", "admin-update"} and admin_visibility == "user"
+        if needs_scope_user_id and not scope_user_id:
+            raise SystemExit("REMINDER_SCOPE_USER_ID is required for user-visible admin reminders")
+        if not scope_user_id and args.cmd not in {"admin-issue-user-token", "admin-list"} and admin_visibility == "user":
             raise SystemExit("REMINDER_SCOPE_USER_ID is required for admin CRUD")
 
         hdrs = {}
@@ -120,13 +131,20 @@ def main(argv: list[str] | None = None) -> int:
                 f"{base}/v1/admin/reminders",
                 bearer,
                 headers=hdrs,
-                body={"text": args.text, "due_at": _due_at_or_none(args.due_at)},
+                body={"text": args.text, "due_at": _due_at_or_none(args.due_at), "visibility": args.visibility},
             )
         elif args.cmd == "admin-list":
-            q = urlencode({"include_done": args.include_done.lower() == "true"})
+            params = {"include_done": args.include_done.lower() == "true"}
+            if args.visibility:
+                params["visibility"] = args.visibility
+            q = urlencode(params)
             out = _request("GET", f"{base}/v1/admin/reminders?{q}", bearer, headers=hdrs)
         elif args.cmd == "admin-update":
-            body = {"text": args.text, "due_at": _due_at_or_none(args.due_at) if args.due_at is not None else None}
+            body = {
+                "text": args.text,
+                "due_at": _due_at_or_none(args.due_at) if args.due_at is not None else None,
+                "visibility": args.visibility,
+            }
             if args.done is not None:
                 body["done"] = args.done.lower() == "true"
             out = _request("PATCH", f"{base}/v1/admin/reminders/{args.reminder_id}", bearer, headers=hdrs, body=body)

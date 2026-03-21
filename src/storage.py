@@ -4,8 +4,14 @@ import os
 from dataclasses import dataclass
 from typing import Protocol
 
-from vercel.blob import BlobClient
-from vercel.blob.errors import BlobError
+try:
+    from vercel.blob import BlobClient
+    from vercel.blob.errors import BlobError
+except ImportError:  # pragma: no cover - Blob-backed storage is optional in local tests
+    BlobClient = None
+
+    class BlobError(Exception):
+        pass
 
 
 class StorageBackend(Protocol):
@@ -37,6 +43,8 @@ class BlobStorage:
     token: str | None
 
     def _client(self) -> BlobClient:
+        if BlobClient is None:
+            raise RuntimeError("vercel package is required for BlobStorage")
         if self.token:
             return BlobClient(token=self.token)
         return BlobClient()
@@ -45,7 +53,7 @@ class BlobStorage:
         os.makedirs(os.path.dirname(self.local_path) or ".", exist_ok=True)
         client = self._client()
         try:
-            result = client.get(self.blob_path, access=self.access)
+            result = client.get(self.blob_path, access=self.access, use_cache=False)
         except Exception as e:
             if not (isinstance(e, BlobError) or type(e).__name__ == "BlobNotFoundError"):
                 raise

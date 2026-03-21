@@ -31,6 +31,17 @@ def require_admin_bearer(
 def require_scoped_user_id(
     x_reminder_user_id: str = Header(default="", alias="X-Reminder-User-Id"),
 ) -> int:
+    user_id = optional_scoped_user_id(x_reminder_user_id)
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="Invalid X-Reminder-User-Id")
+    return user_id
+
+
+def optional_scoped_user_id(
+    x_reminder_user_id: str = Header(default="", alias="X-Reminder-User-Id"),
+) -> int | None:
+    if not x_reminder_user_id.strip():
+        return None
     try:
         user_id = int(x_reminder_user_id)
         if user_id <= 0:
