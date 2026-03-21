@@ -90,14 +90,13 @@ class TelegramFlowTests(unittest.IsolatedAsyncioTestCase):
                 "message": {
                     "text": "/start",
                     "chat": {"id": 9002},
-                    "from": {"id": 1234},
                 }
             },
             bot=bot,
         )
 
         self.assertIsNone(webhook_result["user_id"])
-        self.assertIsNone(self.db.get_chat_id(1234))
+        self.assertEqual(self.db.list_chat_bindings(), [])
         self.assertIn((9002, "Missing start token. Use /start <user-token>."), bot.messages)
 
     async def test_due_dispatch_respects_offset_aware_due_at(self) -> None:

@@ -100,7 +100,7 @@ async def handle_webhook_update(
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
 
-    if not text.startswith("/start") or chat_id is None:
+    if not (text == "/start" or text.startswith("/start ") or text.startswith("/start@")) or chat_id is None:
         return {"ok": True, "handled": False}
 
     try:
@@ -151,12 +151,12 @@ async def dispatch_due_reminders(
     failed: list[int] = []
 
     for row in due:
-        user_id = int(row["user_id"])
         reminder_id = int(row["id"])
         try:
             if row.get("visibility") == "global":
                 delivered = await send_global_text(db, str(row["text"]), bot)
             else:
+                user_id = int(row["user_id"])
                 delivered = await send_text(db, user_id, str(row["text"]), bot)
         except Exception:
             failed.append(reminder_id)
